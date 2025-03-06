@@ -1,0 +1,1124 @@
+# Django 用户系统测试问题总结
+
+## 1. 密码处理相关问题
+
+### 1.1 无限递归错误
+问题描述：
+- 错误信息：RecursionError: maximum recursion depth exceeded
+- 原因：在User模型中自定义的password属性setter导致了无限递归
+
+详细解决步骤：
+1. 移除User模型中的自定义password属性：
+
+修改前：
+```python
+# models.py
+class User(AbstractUser):
+    _raw_password = None
+    
+    @property
+    def password(self):
+        return self._raw_password
+
+    @password.setter
+    def password(self, raw_password):
+        self._raw_password = raw_password
+        self.set_password(raw_password)  # 这里会再次触发setter，导致递归
+```
+
+修改后：
+```python
+# models.py
+class User(AbstractUser):
+    # 完全移除自定义的password属性，使用AbstractBaseUser提供的password字段
+    # 不需要显式定义password字段
+    pass
+```
+
+2. 在create_user方法中正确设置密码：
+
+修改前：
+```python
+# models.py
+def _create_user(self, phone_number, password=None, **extra_fields):
+    user = self.model(phone_number=phone_number, **extra_fields)
+    user.password = password  # 这里会触发setter导致递归
+    user.save()
+    return user
+```
+
+修改后：
+```python
+# models.py
+def _create_user(self, phone_number, password=None, **extra_fields):
+    user = self.model(phone_number=phone_number, **extra_fields)
+    if password:
+        user.set_password(password)  # 直接使用set_password方法
+    else:
+        user.set_unusable_password()
+    user.save()
+    return user
+```
+
+### 1.2 密码验证失败
+问题描述：
+- 错误信息：AssertionError: False is not true
+- 原因：密码没有正确设置或验证失败
+
+详细解决步骤：
+1. 修改用户创建逻辑：
+
+修改前：
+```python
+# tests.py
+def setUp(self):
+    self.user = User.objects.create(  # 错误：直接使用create
+        name='测试用户',
+        phone_number='13800138000',
+        password='testpass123'  # 密码未经过哈希处理
+    )
+```
+
+修改后：
+```python
+# tests.py
+def setUp(self):
+    self.user_data = {
+        'name': '测试用户',
+        'phone_number': '13800138000',
+        'password': 'testpass123',
+        'start_date': timezone.now().date(),
+        'end_date': (timezone.now() + timedelta(days=365)).date()
+    }
+    # 使用create_user方法确保密码正确哈希
+    self.user = User.objects.create_user(**self.user_data)
+```
+
+2. 修改密码验证方法：
+
+修改前：
+```python
+# views.py
+def login(self, request):
+    user = User.objects.get(phone_number=phone_number)
+    if user.password == password:  # 错误的密码验证方式
+        # 处理登录逻辑
+```
+
+修改后：
+```python
+# views.py
+def login(self, request):
+    try:
+        user = User.objects.get(phone_number=phone_number)
+        if user.check_password(password):  # 正确：使用check_password方法
+            # 处理登录逻辑
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                'status': 'success',
+                'tokens': {
+                    'refresh': str(refresh),
+                    'access': str(refresh.access_token),
+                }
+            })
+        else:
+            return Response({
+                'status': 'error',
+                'message': '密码错误'
+            }, status=status.HTTP_401_UNAUTHORIZED)
+    except User.DoesNotExist:
+        logger.warning(f"User not found: {phone_number}")
+        return Response({
+            'status': 'error',
+            'message': '用户不存在'
+        }, status=status.HTTP_404_NOT_FOUND)
+```
+
+3. 在序列化器中正确处理密码：
+
+修改前：
+```python
+# serializers.py
+def create(self, validated_data):
+    user = User.objects.create(  # 错误：直接使用create
+        **validated_data
+    )
+    return user
+```
+
+修改后：
+```python
+# serializers.py
+def create(self, validated_data):
+    # 移除确认密码字段
+    validated_data.pop('confirm_password', None)
+    # 提取密码
+    password = validated_data.pop('password')
+    # 使用create_user方法创建用户
+    user = User.objects.create_user(
+        password=password,
+        **validated_data
+    )
+    return user
+```
+
+## 2. 用户认证问题
+
+### 2.1 登录失败
+问题描述：
+- 错误信息：AssertionError: 401 != 200
+- 原因：用户认证失败或密码不匹配
+
+详细解决步骤：
+1. 修改登录视图的认证逻辑：
+
+修改前：
+```python
+# views.py
+@action(detail=False, methods=['post'])
+def login(self, request):
+    phone_number = request.data.get('phone_number')
+    password = request.data.get('password')
+    
+    user = User.objects.get(phone_number=phone_number)
+    if user.password == password:  # 错误的密码验证方式
+        return Response({'status': 'success'})
+    return Response({'status': 'error'})
+```
+
+修改后：
+```python
+# views.py
+@action(detail=False, methods=['post'])
+def login(self, request):
+    serializer = self.get_serializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    
+    try:
+        user = User.objects.get(phone_number=serializer.validated_data['phone_number'])
+        
+        # 首先检查用户是否有效
+        if not user.is_valid():
+            logger.warning(f"Account expired for user: {user.name}")
+            return Response({
+                'status': 'error',
+                'message': '用户账号已过期'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # 然后验证密码
+        if not user.check_password(serializer.validated_data['password']):
+            logger.warning(f"Invalid password for user: {user.name}")
+            return Response({
+                'status': 'error',
+                'message': '密码错误'
+            }, status=status.HTTP_401_UNAUTHORIZED)
+        
+        # 生成token
+        refresh = RefreshToken.for_user(user)
+        logger.info(f"Login successful for user: {user.name}")
+        return Response({
+            'status': 'success',
+            'user': UserSerializer(user).data,
+            'tokens': {
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+            }
+        })
+        
+    except User.DoesNotExist:
+        logger.warning(f"User not found: {serializer.validated_data['phone_number']}")
+        return Response({
+            'status': 'error',
+            'message': '用户不存在'
+        }, status=status.HTTP_404_NOT_FOUND)
+```
+
+2. 在测试中正确设置用户状态：
+
+修改前：
+```python
+# tests.py
+def test_user_login(self):
+    user = User.objects.create(
+        phone_number='13800138000',
+        password='testpass123'
+    )
+    response = self.client.post('/api/login/', {
+        'phone_number': '13800138000',
+        'password': 'testpass123'
+    })
+```
+
+修改后：
+```python
+# tests.py
+def test_user_login(self):
+    # 创建有效的用户，确保所有必要字段都设置正确
+    user = self._create_user(
+        phone_number='13800138000',
+        password='testpass123',
+        name='测试用户',
+        start_date=timezone.now().date(),
+        end_date=timezone.now().date() + timedelta(days=365)
+    )
+    
+    # 使用reverse获取正确的URL
+    response = self.client.post(reverse('user-login'), {
+        'phone_number': '13800138000',
+        'password': 'testpass123'
+    })
+    
+    # 详细的响应验证
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
+    self.assertEqual(response.data['status'], 'success')
+    self.assertIn('tokens', response.data)
+    self.assertIn('user', response.data)
+```
+
+### 2.2 Token生成问题
+问题描述：
+- 错误信息：KeyError: 'tokens'
+- 原因：登录成功后没有正确生成JWT token
+
+详细解决步骤：
+1. 确保JWT配置正确：
+
+修改前：
+```python
+# settings.py
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework.authentication.BasicAuthentication',
+    ),
+}
+```
+
+修改后：
+```python
+# settings.py
+INSTALLED_APPS = [
+    # ...
+    'rest_framework_simplejwt',
+]
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
+```
+
+2. 修改登录视图返回token：
+
+修改前：
+```python
+# views.py
+@action(detail=False, methods=['post'])
+def login(self, request):
+    if user.check_password(password):
+        return Response({
+            'status': 'success',
+            'user': UserSerializer(user).data
+        })  # 缺少token
+```
+
+修改后：
+```python
+# views.py
+from rest_framework_simplejwt.tokens import RefreshToken
+
+@action(detail=False, methods=['post'])
+def login(self, request):
+    if user.check_password(password):
+        # 生成JWT token
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'status': 'success',
+            'user': UserSerializer(user).data,
+            'tokens': {
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+            }
+        })
+```
+
+3. 在测试中验证token：
+
+修改前：
+```python
+# tests.py
+def test_user_login(self):
+    response = self.client.post(reverse('user-login'), data)
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
+```
+
+修改后：
+```python
+# tests.py
+def test_user_login(self):
+    response = self.client.post(reverse('user-login'), data)
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
+    self.assertIn('tokens', response.data)
+    self.assertIn('refresh', response.data['tokens'])
+    self.assertIn('access', response.data['tokens'])
+    
+    # 验证token是否可用
+    access_token = response.data['tokens']['access']
+    headers = {'HTTP_AUTHORIZATION': f'Bearer {access_token}'}
+    response = self.client.get(reverse('user-detail', args=[user.id]), **headers)
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
+```
+
+## 3. 日期验证问题
+
+### 3.1 结束日期验证错误
+问题描述：
+- 错误信息：ValidationError: {'end_date': '结束日期不能早于开始日期'}
+- 原因：日期验证逻辑触发但测试数据无效
+
+详细解决步骤：
+1. 修改模型的save方法：
+
+修改前：
+```python
+# models.py
+def save(self, *args, **kwargs):
+    if self.start_date > self.end_date:
+        raise ValidationError('结束日期不能早于开始日期')
+    super().save(*args, **kwargs)
+```
+
+修改后：
+```python
+# models.py
+def save(self, *args, validate_dates=True, **kwargs):
+    try:
+        if validate_dates:
+            self.clean()  # 执行完整验证
+        else:
+            # 仅验证手机号，跳过日期验证
+            if self.phone_number:
+                validate_phone_number(self.phone_number)
+                
+        # 确保username和phone_number保持一致
+        self.username = self.phone_number
+        
+        super().save(*args, **kwargs)
+        logger.info(f"User saved successfully: {self.name}")
+        
+    except ValidationError as e:
+        logger.warning(f"Validation error when saving user {self.name}: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Error saving user {self.name}: {str(e)}")
+        raise ValueError(f"保存用户失败: {str(e)}")
+```
+
+2. 添加clean方法进行验证：
+
+修改前：
+```python
+# models.py
+class User(AbstractUser):
+    # 没有clean方法
+    pass
+```
+
+修改后：
+```python
+# models.py
+class User(AbstractUser):
+    def clean(self):
+        """
+        模型验证
+        """
+        errors = {}
+        
+        # 验证日期
+        if self.start_date and self.end_date:
+            if self.start_date > self.end_date:
+                errors['end_date'] = '结束日期不能早于开始日期'
+            elif self.end_date < timezone.now().date():
+                errors['end_date'] = '结束日期不能早于当前日期'
+        
+        # 验证手机号
+        if self.phone_number:
+            try:
+                validate_phone_number(self.phone_number)
+            except ValidationError as e:
+                errors.update(e.message_dict)
+        
+        if errors:
+            raise ValidationError(errors)
+```
+
+3. 在测试中正确处理日期验证：
+
+修改前：
+```python
+# tests.py
+def test_user_validity(self):
+    user = User.objects.create_user(
+        start_date=timezone.now().date() - timedelta(days=2),
+        end_date=timezone.now().date() - timedelta(days=1)
+    )  # 这会失败，因为结束日期在过去
+```
+
+修改后：
+```python
+# tests.py
+def test_user_validity(self):
+    # 创建过期用户时跳过日期验证
+    user = User.objects.create_user(
+        name='测试用户',
+        phone_number='13800138000',
+        password='testpass123',
+        start_date=timezone.now().date() - timedelta(days=2),
+        end_date=timezone.now().date() - timedelta(days=1)
+    )
+    user.save(validate_dates=False)  # 跳过日期验证
+    
+    # 验证用户确实已过期
+    self.assertFalse(user.is_valid())
+    
+    # 测试正常用户
+    valid_user = User.objects.create_user(
+        name='有效用户',
+        phone_number='13800138001',
+        password='testpass123',
+        start_date=timezone.now().date(),
+        end_date=timezone.now().date() + timedelta(days=365)
+    )
+    self.assertTrue(valid_user.is_valid())
+```
+
+## 4. 手机号验证问题
+
+### 4.1 手机号格式验证
+问题描述：
+- 错误信息：ValidationError: {'phone_number': '请输入有效的11位手机号'}
+- 原因：手机号格式不符合要求
+
+详细解决步骤：
+1. 实现手机号验证函数：
+```python
+# models.py
+def validate_phone_number(phone_number):
+    phone_validator = RegexValidator(
+        regex=r'^1[3-9]\d{9}$',
+        message='请输入有效的11位手机号'
+    )
+    try:
+        phone_validator(phone_number)
+    except ValidationError as e:
+        logger.error(f"Invalid phone number format: {phone_number}")
+        raise ValidationError({'phone_number': str(e)})
+```
+
+2. 在模型中使用验证器：
+```python
+# models.py
+class User(AbstractUser):
+    phone_number = models.CharField(
+        '手机号',
+        max_length=11,
+        unique=True,
+        validators=[RegexValidator(
+            regex=r'^1[3-9]\d{9}$',
+            message='请输入有效的11位手机号'
+        )],
+        error_messages={
+            'unique': "该手机号已被注册",
+        }
+    )
+```
+
+3. 在序列化器中添加验证：
+```python
+# serializers.py
+class UserSerializer(serializers.ModelSerializer):
+    phone_number = serializers.CharField(
+        validators=[
+            RegexValidator(
+                regex=r'^1[3-9]\d{9}$',
+                message='请输入有效的11位手机号'
+            )
+        ]
+    )
+```
+
+### 4.2 手机号唯一性验证
+问题描述：
+- 错误信息：ValidationError: {'phone_number': '该手机号已被注册'}
+- 原因：测试中使用了重复的手机号
+
+详细解决步骤：
+1. 在测试中使用唯一手机号：
+```python
+# tests.py
+def setUp(self):
+    # 使用uuid生成随机手机号
+    self.phone_number = f"138{str(uuid.uuid4().int)[:8]}"
+    self.user_data = {
+        'name': '测试用户',
+        'phone_number': self.phone_number,
+        'password': 'testpass123'
+    }
+```
+
+2. 创建辅助方法生成唯一手机号：
+```python
+# tests.py
+def _generate_phone(self):
+    return f"138{str(uuid.uuid4().int)[:8]}"
+
+def _create_user(self, **kwargs):
+    phone = kwargs.pop('phone_number', self._generate_phone())
+    return User.objects.create_user(
+        phone_number=phone,
+        **kwargs
+    )
+```
+
+## 5. 测试数据准备问题
+
+### 5.1 测试数据初始化
+问题描述：
+- 错误：测试数据准备不完整或不正确
+- 原因：setUp方法中的数据准备不充分
+
+详细解决步骤：
+1. 完善setUp方法：
+```python
+# tests.py
+def setUp(self):
+    self.client = APIClient()
+    self.phone_number = f"138{str(uuid.uuid4().int)[:8]}"
+    
+    # 准备用户数据
+    self.user_data = {
+        'name': '测试用户',
+        'phone_number': self.phone_number,
+        'password': 'testpass123',
+        'confirm_password': 'testpass123',
+        'start_date': timezone.now().date().isoformat(),
+        'end_date': (timezone.now() + timedelta(days=365)).date().isoformat()
+    }
+    
+    # 创建测试用户
+    self.user = User.objects.create_user(
+        name=self.user_data['name'],
+        phone_number=self.user_data['phone_number'],
+        password=self.user_data['password'],
+        start_date=timezone.now().date(),
+        end_date=timezone.now().date() + timedelta(days=365)
+    )
+    
+    # 创建管理员用户
+    self.admin_user = self._create_user(is_admin=True)
+```
+
+2. 实现数据清理：
+```python
+# tests.py
+def tearDown(self):
+    User.objects.all().delete()
+```
+
+### 5.2 测试隔离性
+问题描述：
+- 错误：测试用例之间相互影响
+- 原因：测试数据没有很好地隔离
+
+详细解决步骤：
+1. 使用事务确保测试隔离：
+```python
+# tests.py
+from django.test import TransactionTestCase
+
+class UserAPITests(TransactionTestCase):
+    def setUp(self):
+        # ... 设置代码 ...
+        
+    def tearDown(self):
+        # ... 清理代码 ...
+```
+
+2. 为每个测试用例使用唯一标识：
+```python
+# tests.py
+def _create_unique_user(self, **kwargs):
+    unique_id = str(uuid.uuid4())[:8]
+    defaults = {
+        'name': f'测试用户_{unique_id}',
+        'phone_number': f'138{unique_id}',
+        'password': 'testpass123'
+    }
+    defaults.update(kwargs)
+    return self._create_user(**defaults)
+```
+
+## 6. 权限验证问题
+
+### 6.1 未授权访问
+问题描述：
+- 错误信息：AssertionError: 403 != 200
+- 原因：缺少必要的权限
+
+详细解决步骤：
+1. 正确设置权限类：
+```python
+# views.py
+class UserViewSet(viewsets.ModelViewSet):
+    def get_permissions(self):
+        if self.action in ['login', 'check_phone']:
+            permission_classes = []
+        elif self.action in ['create', 'destroy']:
+            permission_classes = [IsAdminUser]
+        else:
+            permission_classes = [IsAuthenticated]
+        return [permission() for permission in permission_classes]
+```
+
+2. 在测试中正确设置认证：
+```python
+# tests.py
+def test_protected_endpoint(self):
+    # 创建并认证用户
+    user = self._create_user()
+    self.client.force_authenticate(user=user)
+    
+    # 测试需要认证的端点
+    response = self.client.get(reverse('user-list'))
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
+```
+
+3. 测试未认证场景：
+```python
+# tests.py
+def test_unauthenticated_access(self):
+    # 确保客户端未认证
+    self.client.force_authenticate(user=None)
+    
+    # 测试需要认证的端点
+    response = self.client.get(reverse('user-list'))
+    self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+```
+
+## 最佳实践建议
+
+1. 日志记录
+```python
+# 配置日志
+import logging
+logger = logging.getLogger(__name__)
+
+# 在关键操作点添加日志
+try:
+    # 操作代码
+    logger.info("Operation successful")
+except Exception as e:
+    logger.error(f"Operation failed: {str(e)}")
+    raise
+```
+
+2. 错误处理
+```python
+try:
+    # 可能出错的代码
+    user = User.objects.get(phone_number=phone_number)
+except User.DoesNotExist:
+    logger.warning(f"User not found: {phone_number}")
+    raise ValidationError("用户不存在")
+except Exception as e:
+    logger.error(f"Unexpected error: {str(e)}")
+    raise
+```
+
+3. 测试用例设计
+```python
+def test_user_lifecycle(self):
+    # 测试用户创建
+    user = self._create_unique_user()
+    self.assertTrue(user.pk)
+    
+    # 测试用户更新
+    user.name = "新名字"
+    user.save()
+    user.refresh_from_db()
+    self.assertEqual(user.name, "新名字")
+    
+    # 测试用户删除
+    user.delete()
+    self.assertFalse(User.objects.filter(pk=user.pk).exists())
+```
+
+4. 代码组织
+```python
+# 使用测试基类
+class BaseUserTest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        
+    def _create_user(self, **kwargs):
+        # 通用的用户创建逻辑
+        pass
+
+class UserAPITests(BaseUserTest):
+    def test_specific_feature(self):
+        # 特定功能测试
+        pass
+```
+
+# 标签模型测试问题总结
+
+## 1. 模型测试 (TagModelTests) 问题
+
+### 1.1 标签层级关系验证
+问题描述：
+- 在测试标签层级关系时，需要确保正确处理父子关系和循环引用
+- 需要验证多级层级关系的正确性
+
+解决方案：
+```python
+def test_tag_hierarchy(self):
+    # 创建基础测试数据
+    Tag.objects.all().delete()  # 清理现有数据
+    
+    # 测试父子关系
+    parent_tag = Tag.objects.create(
+        tag_name='父标签',
+        created_by=self.user,
+        updated_by=self.user
+    )
+    
+    child_tag = Tag.objects.create(
+        tag_name='子标签',
+        parent=parent_tag,
+        created_by=self.user,
+        updated_by=self.user
+    )
+    
+    # 验证关系
+    self.assertEqual(child_tag.parent, parent_tag)
+    self.assertIn(child_tag, parent_tag.children.all())
+    
+    # 验证循环引用保护
+    with self.assertRaises(ValidationError):
+        parent_tag.parent = child_tag
+        parent_tag.save()
+```
+
+### 1.2 标签验证逻辑
+问题描述：
+- 需要确保标签名称不能为空
+- 标签名称必须唯一
+- 父标签必须存在且已启用
+
+解决方案：
+```python
+def test_tag_validation(self):
+    # 测试空标签名
+    with self.assertRaises(ValidationError):
+        Tag.objects.create(
+            tag_name='',
+            created_by=self.user,
+            updated_by=self.user
+        )
+    
+    # 测试重复标签名
+    tag1 = Tag.objects.create(
+        tag_name='测试标签',
+        created_by=self.user,
+        updated_by=self.user
+    )
+    
+    with self.assertRaises(ValidationError):
+        Tag.objects.create(
+            tag_name='测试标签',
+            created_by=self.user,
+            updated_by=self.user
+        )
+```
+
+## 2. API测试 (TagAPITests) 问题
+
+### 2.1 标签列表分页问题
+问题描述：
+- 需要正确处理分页响应格式
+- 需要验证返回的标签数量和顺序
+
+解决方案：
+```python
+def test_list_tags(self):
+    # 清理现有数据
+    Tag.objects.all().delete()
+    
+    # 创建测试标签
+    tags = []
+    for i in range(2):
+        tag = Tag.objects.create(
+            tag_name=f'标签{i+1}',
+            created_by=self.admin_user,
+            updated_by=self.admin_user
+        )
+        tags.append(tag)
+    
+    # 验证响应格式
+    response = self.client.get(self.list_url)
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
+    self.assertIn('count', response.data)
+    self.assertIn('results', response.data)
+    self.assertEqual(response.data['count'], 2)
+```
+
+### 2.2 标签激活/停用问题
+问题描述：
+- 需要正确处理标签的激活和停用
+- 需要确保父子标签状态的一致性
+
+解决方案：
+```python
+def test_activate_deactivate_tag(self):
+    # 创建父子标签
+    parent_tag = Tag.objects.create(
+        tag_name='父标签',
+        is_active=True,
+        created_by=self.admin_user
+    )
+    
+    child_tag = Tag.objects.create(
+        tag_name='子标签',
+        parent=parent_tag,
+        is_active=True,
+        created_by=self.admin_user
+    )
+    
+    # 测试停用父标签
+    url = reverse('tag-deactivate', args=[parent_tag.id])
+    response = self.client.post(url)
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
+    
+    # 验证父子标签都被停用
+    parent_tag.refresh_from_db()
+    child_tag.refresh_from_db()
+    self.assertFalse(parent_tag.is_active)
+    self.assertFalse(child_tag.is_active)
+```
+
+### 2.3 标签使用统计问题
+问题描述：
+- 需要正确计算标签的使用次数
+- 需要处理标签不存在的情况
+
+解决方案：
+```python
+def test_tag_usage(self):
+    # 创建标签
+    tag = Tag.objects.create(
+        tag_name='测试标签',
+        created_by=self.admin_user
+    )
+    
+    # 测试获取使用情况
+    url = reverse('tag-usage', args=[tag.id])
+    response = self.client.get(url)
+    self.assertEqual(response.status_code, status.HTTP_200_OK)
+    self.assertEqual(response.data['usage_count'], 0)
+    
+    # 测试不存在的标签
+    url = reverse('tag-usage', args=[99999])
+    response = self.client.get(url)
+    self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+```
+
+## 最佳实践建议
+
+1. 测试数据准备
+```python
+def setUp(self):
+    # 清理现有数据
+    Tag.objects.all().delete()
+    
+    # 创建测试用户
+    self.user = User.objects.create_user(
+        name='测试用户',
+        phone_number='13800138000',
+        password='testpass123'
+    )
+    
+    # 创建基础测试数据
+    self.tag_data = {
+        'tag_name': '测试标签',
+        'description': '测试描述',
+        'sort_order': 0
+    }
+```
+
+2. 错误处理和日志记录
+```python
+# 添加详细的日志记录
+logger.info("已创建的测试标签:")
+logger.info(f"标签1: {tag1.id} - {tag1.tag_name}")
+logger.info(f"标签2: {tag2.id} - {tag2.tag_name}")
+
+# 记录API响应
+logger.info("API 响应状态码: %s", response.status_code)
+logger.info("返回的数据类型: %s", type(response.data))
+logger.info("返回的原始数据: %s", response.data)
+```
+
+3. 测试清理
+```python
+def tearDown(self):
+    # 清理测试数据
+    Tag.objects.all().delete()
+    User.objects.all().delete()
+```
+
+4. 权限测试
+```python
+def test_unauthorized_access(self):
+    # 确保未认证用户无法访问
+    self.client.force_authenticate(user=None)
+    response = self.client.get(self.list_url)
+    self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+    
+    # 测试普通用户无法执行管理操作
+    self.client.force_authenticate(user=self.user)
+    response = self.client.post(reverse('tag-deactivate', args=[1]))
+    self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+```
+
+# 话术功能测试问题总结
+
+## 1. 版本管理测试问题
+
+### 1.1 并发版本创建
+问题描述：
+- 在并发创建新版本时可能出现版本号重复
+- 事务隔离级别可能不足以处理高并发场景
+- 锁等待超时可能导致版本创建失败
+
+解决方案：
+```python
+def test_create_new_version(self):
+    # 使用 select_for_update 获取行锁
+    with transaction.atomic():
+        max_version = Script.objects.select_for_update()\
+            .filter(title=self.title)\
+            .aggregate(max_version=Max('version'))['max_version']
+```
+
+## 2. 搜索功能测试问题
+
+### 2.1 关键词搜索
+问题描述：
+- 搜索结果可能包含已删除或未启用的话术
+- 标题和内容的搜索权重不合理
+- 分页可能影响搜索结果的完整性
+
+解决方案：
+```python
+def test_search_functionality(self):
+    # 添加状态过滤
+    queryset = queryset.filter(is_active=True)
+    # 优化搜索权重
+    queryset = queryset.annotate(
+        search_rank=SearchRank(
+            SearchVector('title', weight='A') + 
+            SearchVector('content', weight='B'),
+            SearchQuery(keyword)
+        )
+    )
+```
+
+## 3. 标签关联测试问题
+
+### 3.1 标签层级关系
+问题描述：
+- 父子标签关系可能形成循环引用
+- 删除父标签时子标签处理不当
+- 标签状态变更未同步到关联话术
+
+解决方案：
+```python
+def test_tag_hierarchy(self):
+    # 验证标签层级
+    def validate_tag_hierarchy(tag):
+        visited = set()
+        current = tag
+        while current.parent:
+            if current.parent.id in visited:
+                raise ValidationError("检测到循环引用")
+            visited.add(current.parent.id)
+            current = current.parent
+```
+
+## 4. 批量操作测试问题
+
+### 4.1 批量创建和更新
+问题描述：
+- 批量操作可能部分成功部分失败
+- 事务回滚可能不完整
+- 大量数据操作性能问题
+
+解决方案：
+```python
+def test_bulk_operations(self):
+    # 使用事务和批量操作
+    with transaction.atomic():
+        # 批量创建
+        scripts = Script.objects.bulk_create(script_objects)
+        # 批量创建标签关联
+        relations = [
+            ScriptTagRelation(script=script, tag=tag)
+            for script in scripts
+            for tag in tags
+        ]
+        ScriptTagRelation.objects.bulk_create(relations)
+```
+
+### 4.2 并发访问控制
+问题描述：
+- 并发批量操作可能导致数据不一致
+- 锁超时影响用户体验
+- 资源竞争导致性能下降
+
+解决方案：
+```python
+def test_concurrent_bulk_operations(self):
+    # 使用行级锁控制并发
+    with transaction.atomic():
+        scripts = Script.objects.select_for_update()\
+            .filter(id__in=script_ids)
+        # 执行批量操作
+```
+
+## 5. 性能测试问题
+
+### 5.1 查询优化
+问题描述：
+- N+1 查询问题
+- 大量标签关联导致性能下降
+- 复杂查询未使用索引
+
+解决方案：
+```python
+def test_query_performance(self):
+    # 优化查询
+    queryset = Script.objects.prefetch_related(
+        Prefetch('tags', queryset=Tag.objects.only('id', 'tag_name'))
+    ).select_related('created_by', 'updated_by')
+```

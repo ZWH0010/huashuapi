@@ -1,0 +1,669 @@
+{
+  "info": {
+    "name": "DyLiveApp API",
+    "description": "DyLiveApp API测试集合",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "用户管理",
+      "item": [
+        {
+          "name": "用户登录",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/users/login/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"{{test_phone}}\",\n  \"password\": \"{{test_password}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"返回包含tokens和user信息\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('tokens');",
+                  "    pm.expect(jsonData).to.have.property('user');",
+                  "    pm.expect(jsonData.tokens).to.have.property('access');",
+                  "    pm.expect(jsonData.tokens).to.have.property('refresh');",
+                  "});",
+                  "",
+                  "pm.test(\"保存token到环境变量\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.environment.set(\"access_token\", jsonData.tokens.access);",
+                  "    pm.environment.set(\"refresh_token\", jsonData.tokens.refresh);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "用户注册",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/users/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"测试用户\",\n  \"phone_number\": \"{{test_phone}}\",\n  \"password\": \"{{test_password}}\",\n  \"confirm_password\": \"{{test_password}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"返回用户信息\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('id');",
+                  "    pm.expect(jsonData).to.have.property('name');",
+                  "    pm.expect(jsonData).to.have.property('phone_number');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "更新用户信息",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/users/profile/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"更新的用户名\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"返回更新后的用户信息\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('name', '更新的用户名');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "修改密码",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/users/change-password/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"old_password\": \"{{test_password}}\",\n  \"new_password\": \"newpassword123\",\n  \"confirm_password\": \"newpassword123\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "标签管理",
+      "item": [
+        {
+          "name": "获取标签列表",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/tags/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"返回分页数据\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('count');",
+                  "    pm.expect(jsonData).to.have.property('results');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "创建标签",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/tags/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tag_name\": \"测试标签\",\n  \"description\": \"这是一个测试标签\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"返回标签信息\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('id');",
+                  "    pm.expect(jsonData).to.have.property('tag_name');",
+                  "    pm.environment.set(\"test_tag_id\", jsonData.id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "更新标签",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/tags/{{test_tag_id}}/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tag_name\": \"更新的标签名称\",\n  \"description\": \"更新的标签描述\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"返回更新后的标签信息\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.tag_name).to.equal('更新的标签名称');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "删除标签",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/tags/{{test_tag_id}}/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 204\", function () {",
+                  "    pm.response.to.have.status(204);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "搜索标签",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/tags/?search=测试",
+              "query": [
+                {
+                  "key": "search",
+                  "value": "测试"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"返回搜索结果\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('results');",
+                  "    pm.expect(jsonData.results).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "话术管理",
+      "item": [
+        {
+          "name": "获取话术列表",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/scripts/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"返回分页数据\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('count');",
+                  "    pm.expect(jsonData).to.have.property('results');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "创建话术",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/scripts/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"测试话术\",\n  \"content\": \"这是一个测试话术内容\",\n  \"script_type\": \"custom\",\n  \"tags\": [{{test_tag_id}}]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"返回话术信息\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('id');",
+                  "    pm.expect(jsonData).to.have.property('title');",
+                  "    pm.expect(jsonData).to.have.property('content');",
+                  "    pm.expect(jsonData).to.have.property('tags');",
+                  "    pm.environment.set(\"test_script_id\", jsonData.id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "创建新版本",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/scripts/{{test_script_id}}/new_version/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"返回新版本信息\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('id');",
+                  "    pm.expect(jsonData).to.have.property('version');",
+                  "    pm.expect(jsonData.version).to.be.above(1);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "更新话术",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/scripts/{{test_script_id}}/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"更新的话术标题\",\n  \"content\": \"更新的话术内容\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"返回更新后的话术信息\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.title).to.equal('更新的话术标题');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "删除话术",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/scripts/{{test_script_id}}/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 204\", function () {",
+                  "    pm.response.to.have.status(204);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "搜索话术",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/scripts/?search=测试&tags={{test_tag_id}}",
+              "query": [
+                {
+                  "key": "search",
+                  "value": "测试"
+                },
+                {
+                  "key": "tags",
+                  "value": "{{test_tag_id}}"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"返回搜索结果\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('results');",
+                  "    pm.expect(jsonData.results).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "获取话术版本列表",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/scripts/{{test_script_id}}/versions/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"返回版本列表\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "错误测试",
+      "item": [
+        {
+          "name": "无效Token",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer invalid_token"
+              }
+            ],
+            "url": "{{base_url}}/api/scripts/"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 401\", function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "创建重复标签",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/api/tags/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tag_name\": \"测试标签\",\n  \"description\": \"这是一个重复的标签\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"状态码为 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+} 

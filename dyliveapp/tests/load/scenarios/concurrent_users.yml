@@ -1,0 +1,142 @@
+config:
+  target: "http://localhost:8000"
+  phases:
+    - name: "Warm up"
+      duration: 120
+      arrivalRate: 1
+      rampTo: 2
+    - name: "Peak load"
+      duration: 180
+      arrivalRate: 2
+    - name: "Scale down"
+      duration: 60
+      arrivalRate: 2
+      rampTo: 1
+  payload:
+    path: "../data/test_users.csv"
+    fields:
+      - "phone_number"
+      - "password"
+  defaults:
+    headers:
+      Content-Type: "application/json"
+      Accept: "application/json"
+  plugins:
+    metrics-by-endpoint: {}
+    expect: {}
+    ensure: {}
+
+scenarios:
+  - name: "User authentication and script management"
+    flow:
+      # 登录请求
+      - log: "====== Starting login request ======"
+      - log: "Attempting login with phone: {{ phone_number }}"
+      - post:
+          url: "/api/users/login/"
+          json:
+            phone_number: "{{ phone_number }}"
+            password: "{{ password }}"
+          capture:
+            - json: "$"
+              as: "fullLoginResponse"
+            - json: "$.token"
+              as: "userToken"
+          expect:
+            - statusCode: 200
+            - contentType: "application/json"
+            - hasProperty: "token"
+      - log: "Login response: {{ fullLoginResponse }}"
+      - think: 1
+      
+      # 验证token
+      - log: "====== Validating token ======"
+      - log: "Captured token: {{ userToken }}"
+      
+      # 获取用户资料
+      - log: "====== Fetching user profile ======"
+      - get:
+          url: "/api/users/profile/"
+          headers:
+            Authorization: "Bearer {{ userToken }}"
+          capture:
+            - json: "$"
+              as: "fullProfileResponse"
+          expect:
+            - statusCode: 200
+            - contentType: "application/json"
+      - log: "Profile response: {{ fullProfileResponse }}"
+      - think: 2
+      
+      # 创建标签
+      - log: "====== Creating new tag ======"
+      - post:
+          url: "/api/tags/"
+          headers:
+            Authorization: "Bearer {{ userToken }}"
+          json:
+            name: "测试标签_{{ $randomString(5) }}"
+          capture:
+            - json: "$"
+              as: "fullTagResponse"
+            - json: "$.id"
+              as: "tagId"
+          expect:
+            - statusCode: 201
+            - contentType: "application/json"
+            - hasProperty: "id"
+      - log: "Tag creation response: {{ fullTagResponse }}"
+      - think: 1
+      
+      # 创建话术
+      - log: "====== Creating new script ======"
+      - post:
+          url: "/api/scripts/"
+          headers:
+            Authorization: "Bearer {{ userToken }}"
+          json:
+            title: "测试话术_{{ $randomString(5) }}"
+            content: "这是一个测试话术内容_{{ $randomString(10) }}"
+            script_type: "custom"
+            tags: ["{{ tagId }}"]
+          capture:
+            - json: "$"
+              as: "fullScriptResponse"
+            - json: "$.id"
+              as: "scriptId"
+          expect:
+            - statusCode: 201
+            - contentType: "application/json"
+            - hasProperty: "id"
+      - log: "Script creation response: {{ fullScriptResponse }}"
+      - think: 2
+      
+      # 获取话术详情
+      - log: "====== Fetching script details ======"
+      - get:
+          url: "/api/scripts/{{ scriptId }}/"
+          headers:
+            Authorization: "Bearer {{ userToken }}"
+          capture:
+            - json: "$"
+              as: "fullScriptDetailsResponse"
+          expect:
+            - statusCode: 200
+            - contentType: "application/json"
+            - hasProperty: "content"
+      - log: "Script details response: {{ fullScriptDetailsResponse }}"
+      - think: 1
+      
+      # 获取话术版本
+      - log: "====== Fetching script versions ======"
+      - get:
+          url: "/api/scripts/{{ scriptId }}/versions/"
+          headers:
+            Authorization: "Bearer {{ userToken }}"
+          capture:
+            - json: "$"
+              as: "fullVersionsResponse"
+          expect:
+            - statusCode: 200
+            - contentType: "application/json"
+      - log: "Script versions response: {{ fullVersionsResponse }}" 

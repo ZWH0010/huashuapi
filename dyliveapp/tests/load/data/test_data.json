@@ -1,0 +1,14 @@
+{
+    "users": [
+        {"phone_number": "13800138000", "password": "testpass123"},
+        {"phone_number": "13800138001", "password": "testpass123"},
+        {"phone_number": "13800138002", "password": "testpass123"},
+        {"phone_number": "13800138003", "password": "testpass123"},
+        {"phone_number": "13800138004", "password": "testpass123"},
+        {"phone_number": "13800138005", "password": "testpass123"},
+        {"phone_number": "13800138006", "password": "testpass123"},
+        {"phone_number": "13800138007", "password": "testpass123"},
+        {"phone_number": "13800138008", "password": "testpass123"},
+        {"phone_number": "13800138009", "password": "testpass123"}
+    ]
+} 

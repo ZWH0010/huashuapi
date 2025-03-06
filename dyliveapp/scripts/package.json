@@ -1,0 +1,13 @@
+{
+  "name": "dyliveapp-api-tests",
+  "version": "1.0.0",
+  "description": "DyLiveApp API测试脚本",
+  "scripts": {
+    "test": "node run_api_tests.js"
+  },
+  "dependencies": {
+    "newman": "^5.3.2",
+    "newman-reporter-htmlextra": "^1.22.11",
+    "moment": "^2.29.4"
+  }
+} 

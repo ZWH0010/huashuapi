@@ -1,0 +1,22 @@
+# 忽略虚拟环境
+env
+venv
+.venv
+__pycache__
+
+# 忽略数据库文件
+db.sqlite3
+.sqlite3
+
+# 忽略敏感配置
+.env
+local_settings.py
+
+# 忽略Python编译文件
+.pyc
+.pyo
+.pyd
+
+# 其他常见忽略项
+.log
+.DS_Store
